@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpu-lock-client"
-version = "0.2.0"
+version = "0.2.1"
 description = "Async and sync client + CLI for the gpu-lock service."
 readme = "README.md"
 license = "Apache-2.0"

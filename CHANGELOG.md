@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-04-20
+
+### Fixed
+
+- Pinned the server `Dockerfile` to a real `python:3.12-slim` digest (the
+  previous pin pointed to a non-existent digest, breaking the GHCR image
+  build in the v0.2.0 release pipeline).
+- Re-publish of `gpu-lock-client` because v0.2.0 PyPI artifacts were uploaded
+  from a partially-fixed pipeline; v0.2.1 ships the same code from a clean
+  release. No API or behavior changes vs. v0.2.0.
+
 ## [0.2.0] - 2026-04-20
 
 ### Added
@@ -44,5 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial single-GPU FIFO mutex with HTTP API.
 
-[Unreleased]: https://github.com/ildar-idrisov/gpu-lock/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ildar-idrisov/gpu-lock/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/ildar-idrisov/gpu-lock/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/ildar-idrisov/gpu-lock/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ildar-idrisov/gpu-lock/releases/tag/v0.1.0
