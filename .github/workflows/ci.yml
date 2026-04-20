@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install server + client + test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install ./server ./client
+          pip install pytest pytest-asyncio
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+  lint:
+    name: Lint & type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy
+          pip install ./server ./client
+
+      - name: ruff check
+        run: ruff check server client tests
+
+      - name: mypy (client)
+        run: mypy client/gpu_lock_client || true   # non-blocking until strict typing is finalized
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: server/Dockerfile
+          push: false
+          tags: gpu-lock-server:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpu-lock-client"
+version = "0.2.0"
+description = "Async and sync client + CLI for the gpu-lock service."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Ildar Idrisov", email = "loganmerc22@gmail.com" }]
+keywords = ["gpu", "lock", "mutex", "queue", "cuda"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Distributed Computing",
+    "Topic :: System :: Hardware",
+    "Typing :: Typed",
+]
+dependencies = [
+    "httpx>=0.24",
+    "click>=8.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/ildar-idrisov/gpu-lock"
+Repository = "https://github.com/ildar-idrisov/gpu-lock"
+Issues = "https://github.com/ildar-idrisov/gpu-lock/issues"
+Changelog = "https://github.com/ildar-idrisov/gpu-lock/blob/main/CHANGELOG.md"
+
+[project.scripts]
+gpu-lock = "gpu_lock_client._cli:main"
+
+[tool.setuptools.packages.find]
+include = ["gpu_lock_client*"]
+
+[tool.setuptools.package-data]
+gpu_lock_client = ["py.typed"]

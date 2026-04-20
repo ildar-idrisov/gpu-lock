@@ -1,0 +1,27 @@
+services:
+  gpu-lock:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    image: gpu-lock-server:latest
+    restart: unless-stopped
+    environment:
+      # Required. Comma-separated list of managed GPU indices.
+      GPU_IDS: "${GPU_IDS:-0}"
+      # Optional: enable bearer-token auth. Unset/empty → auth disabled.
+      GPU_LOCK_TOKEN: "${GPU_LOCK_TOKEN:-}"
+      # Optional: persist state across restarts. Unset/empty → in-memory only.
+      GPU_LOCK_STATE_FILE: "${GPU_LOCK_STATE_FILE:-/var/lib/gpu-lock/state.json}"
+      # Optional: log sink in addition to stdout.
+      GPU_LOCK_LOG_FILE: "${GPU_LOCK_LOG_FILE:-}"
+      GPU_LOCK_LOG_LEVEL: "${GPU_LOCK_LOG_LEVEL:-INFO}"
+      # How long the server waits for drain on SIGTERM before force-release.
+      GPU_LOCK_SHUTDOWN_DRAIN: "${GPU_LOCK_SHUTDOWN_DRAIN:-5}"
+    ports:
+      - "8090:8090"
+    volumes:
+      - gpu-lock-state:/var/lib/gpu-lock
+    stop_grace_period: 15s
+
+volumes:
+  gpu-lock-state:

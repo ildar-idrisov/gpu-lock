@@ -1,0 +1,198 @@
+# Publishes the client package to PyPI / TestPyPI on tagged release using
+# PyPI Trusted Publishing (OIDC — no long-lived PYPI_TOKEN secret required).
+#
+# Tag conventions:
+#   v0.2.0          → publishes to PyPI, builds GHCR image, creates GitHub Release.
+#   v0.2.0-rc1      → publishes to TestPyPI only (pre-release dry run).
+#   v0.2.0-alpha1   → same as -rc.
+#   v0.2.0-beta1    → same as -rc.
+#
+# One-time setup on https://pypi.org/manage/account/publishing/:
+#   - Project name: gpu-lock-client
+#   - Owner:        ildar-idrisov
+#   - Repo:         gpu-lock
+#   - Workflow:     publish.yml
+#   - Environment:  pypi
+#
+# Repeat the same on https://test.pypi.org/manage/account/publishing/ with
+# environment name `testpypi`.
+#
+# `client/pyproject.toml` version must match the tag (without the `v` prefix
+# and without the pre-release suffix). The build job enforces this.
+
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
+      base_version: ${{ steps.extract.outputs.base_version }}
+      is_prerelease: ${{ steps.extract.outputs.is_prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Extract tag version
+        id: extract
+        run: |
+          set -e
+          tag="${GITHUB_REF_NAME#v}"
+          base="${tag%%-*}"   # strip -rc1 / -alpha1 / -beta1
+          if [ "$tag" = "$base" ]; then
+            prerelease="false"
+          else
+            prerelease="true"
+          fi
+          echo "version=$tag"          >> "$GITHUB_OUTPUT"
+          echo "base_version=$base"    >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Tag $GITHUB_REF_NAME → version=$tag base=$base prerelease=$prerelease"
+
+      - name: Verify client version matches tag base
+        run: |
+          set -e
+          base="${{ steps.extract.outputs.base_version }}"
+          pkg_version=$(grep -E '^version = ' client/pyproject.toml | head -1 | cut -d'"' -f2)
+          if [ "$base" != "$pkg_version" ]; then
+            echo "::error::Tag base v$base does not match client/pyproject.toml version $pkg_version"
+            exit 1
+          fi
+
+      - name: Build sdist + wheel
+        run: python -m build client/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: client/dist/
+
+  publish-testpypi:
+    name: Publish to TestPyPI (pre-release)
+    needs: build
+    if: needs.build.outputs.is_prerelease == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/gpu-lock-client
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    if: needs.build.outputs.is_prerelease == 'false'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/gpu-lock-client
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  docker:
+    name: Build & publish server image
+    needs: build
+    if: needs.build.outputs.is_prerelease == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: server/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/server:${{ needs.build.outputs.version }}
+            ghcr.io/${{ github.repository }}/server:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.build.outputs.version }}
+            org.opencontainers.image.licenses=Apache-2.0
+
+  github-release:
+    name: Create GitHub Release
+    needs: [build, publish-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          set -e
+          version="${{ needs.build.outputs.version }}"
+          # Pull the section between `## [version]` and the next `## ` header.
+          notes=$(awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" {flag=1; next}
+            flag && /^## / {flag=0}
+            flag {print}
+          ' CHANGELOG.md | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
+          if [ -z "$notes" ]; then
+            notes="See [CHANGELOG.md](CHANGELOG.md)."
+          fi
+          {
+            echo 'notes<<RELEASE_NOTES_EOF'
+            echo "$notes"
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.notes.outputs.notes }}
+          files: dist/*
+          generate_release_notes: false
+          fail_on_unmatched_files: true

@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpu-lock-server"
+version = "0.2.0"
+description = "FIFO mutex service for shared GPU access across Docker containers."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Ildar Idrisov", email = "loganmerc22@gmail.com" }]
+keywords = ["gpu", "lock", "mutex", "queue", "docker", "cuda"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Distributed Computing",
+    "Topic :: System :: Hardware",
+]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+]
+
+[project.urls]
+Homepage = "https://github.com/ildar-idrisov/gpu-lock"
+Repository = "https://github.com/ildar-idrisov/gpu-lock"
+Issues = "https://github.com/ildar-idrisov/gpu-lock/issues"
+Changelog = "https://github.com/ildar-idrisov/gpu-lock/blob/main/CHANGELOG.md"
+
+[project.scripts]
+gpu-lock-server = "gpu_lock_server.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["gpu_lock_server*"]
