@@ -1,7 +1,7 @@
 # Hardened image: multi-stage, pinned base digest, non-root runtime user.
 # Rebuild the digest occasionally — `docker pull python:3.12-slim && docker inspect ...`.
 
-FROM python:3.12-slim@sha256:f14b5b04de7b3a5337eaf72e37b6af2c73cf3b7c7a4b4a1c9e4c8c2f11b9dbec AS build
+FROM python:3.12-slim@sha256:804ddf3251a60bbf9c92e73b7566c40428d54d0e79d3428194edf40da6521286 AS build
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -19,7 +19,7 @@ COPY CHANGELOG.md CHANGELOG.md
 RUN pip install --prefix=/install ./server
 
 
-FROM python:3.12-slim@sha256:f14b5b04de7b3a5337eaf72e37b6af2c73cf3b7c7a4b4a1c9e4c8c2f11b9dbec
+FROM python:3.12-slim@sha256:804ddf3251a60bbf9c92e73b7566c40428d54d0e79d3428194edf40da6521286
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
