@@ -51,12 +51,25 @@ class _WaitSlot:
     reason: str = ""  # filled in before event.set()
 
 
+HistoryHook = Callable[[str, Lease], None]
+
+
+def _no_history(_: str, __: Lease) -> None:
+    pass
+
+
 class GpuQueue:
     """FIFO-with-priority for a single GPU."""
 
-    def __init__(self, gpu: int, on_state_change: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        gpu: int,
+        on_state_change: Callable[[], None],
+        on_event: HistoryHook | None = None,
+    ) -> None:
         self.gpu = gpu
         self._on_state_change = on_state_change
+        self._on_event: HistoryHook = on_event or _no_history
         self._lock = asyncio.Lock()
         self._holder: Lease | None = None
         self._queue: list[_WaitSlot] = []
@@ -71,6 +84,7 @@ class GpuQueue:
             raise ShutdownError("server is shutting down")
 
         slot = _WaitSlot(lease=lease)
+        emit_event: str | None = None
         async with self._lock:
             if self._holder is None:
                 self._holder = lease
@@ -83,6 +97,7 @@ class GpuQueue:
                            "owner": lease.owner, "gpu": lease.gpu,
                            "priority": lease.priority.name.lower()},
                 )
+                emit_event = "grant"
             else:
                 self._queue.append(slot)
                 self._queue.sort(key=lambda s: (-int(s.lease.priority), s.lease.enqueued_at))
@@ -93,23 +108,31 @@ class GpuQueue:
                            "priority": lease.priority.name.lower(),
                            "position": self._position_locked(lease.lease_id)},
                 )
+                emit_event = "enqueue"
             self._wake.set()
+        if emit_event is not None:
+            self._on_event(emit_event, lease)
         self._on_state_change()
         return slot
 
     async def release(self, lease_id: str) -> bool:
+        released_lease: Lease | None = None
+        promoted_lease: Lease | None = None
+        cancelled_lease: Lease | None = None
         async with self._lock:
             if self._holder and self._holder.lease_id == lease_id:
+                released_lease = self._holder
                 log.info("lease released",
                          extra={"event": "release", "lease_id": lease_id, "gpu": self.gpu})
                 self._holder = None
-                self._promote_locked()
+                promoted_lease = self._promote_locked()
                 self._wake.set()
                 changed = True
             else:
                 changed = False
                 for i, slot in enumerate(self._queue):
                     if slot.lease.lease_id == lease_id:
+                        cancelled_lease = slot.lease
                         self._queue.pop(i)
                         slot.reason = CANCELLED
                         slot.event.set()
@@ -117,6 +140,12 @@ class GpuQueue:
                                  extra={"event": "cancel", "lease_id": lease_id, "gpu": self.gpu})
                         changed = True
                         break
+        if released_lease is not None:
+            self._on_event("release", released_lease)
+        if promoted_lease is not None:
+            self._on_event("grant", promoted_lease)
+        if cancelled_lease is not None:
+            self._on_event("cancel", cancelled_lease)
         if changed:
             self._on_state_change()
         return changed
@@ -134,6 +163,7 @@ class GpuQueue:
             else:
                 renewed = None
         if renewed is not None:
+            self._on_event("renew", renewed)
             self._on_state_change()
         return renewed
 
@@ -240,9 +270,9 @@ class GpuQueue:
                 return i + 1
         return 0
 
-    def _promote_locked(self) -> None:
+    def _promote_locked(self) -> Lease | None:
         if not self._queue:
-            return
+            return None
         slot = self._queue.pop(0)
         self._holder = slot.lease
         slot.lease.touch()
@@ -252,6 +282,7 @@ class GpuQueue:
                  extra={"event": "grant", "lease_id": slot.lease.lease_id,
                         "owner": slot.lease.owner, "gpu": self.gpu,
                         "priority": slot.lease.priority.name.lower()})
+        return slot.lease
 
     async def _ticker(self) -> None:
         """Fires expiries: holder TTL and queue wait timeouts.
@@ -268,6 +299,9 @@ class GpuQueue:
     async def _expire_now(self) -> None:
         now = time.time()
         state_changed = False
+        expired_holder: Lease | None = None
+        promoted_lease: Lease | None = None
+        wait_timeouts: list[Lease] = []
         async with self._lock:
             # Holder TTL
             if (
@@ -275,12 +309,13 @@ class GpuQueue:
                 and self._holder.expires_at is not None
                 and self._holder.expires_at <= now
             ):
+                expired_holder = self._holder
                 log.warning("lease auto-released on ttl",
                             extra={"event": "ttl_expire",
                                    "lease_id": self._holder.lease_id,
                                    "gpu": self.gpu})
                 self._holder = None
-                self._promote_locked()
+                promoted_lease = self._promote_locked()
                 state_changed = True
             # Queue wait-timeout
             survivors: list[_WaitSlot] = []
@@ -290,6 +325,7 @@ class GpuQueue:
                     s.reason = WAIT_TIMEOUT
                     s.event.set()
                     state_changed = True
+                    wait_timeouts.append(s.lease)
                     log.warning("queued lease timed out in wait",
                                 extra={"event": "wait_timeout",
                                        "lease_id": s.lease.lease_id,
@@ -297,6 +333,12 @@ class GpuQueue:
                 else:
                     survivors.append(s)
             self._queue = survivors
+        if expired_holder is not None:
+            self._on_event("ttl_expire", expired_holder)
+        if promoted_lease is not None:
+            self._on_event("grant", promoted_lease)
+        for lease in wait_timeouts:
+            self._on_event("wait_timeout", lease)
         if state_changed:
             self._on_state_change()
 
@@ -304,11 +346,18 @@ class GpuQueue:
 class GpuLockManager:
     """Fleet of per-GPU queues + dispatch."""
 
-    def __init__(self, gpu_ids: Iterable[int], on_state_change: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        gpu_ids: Iterable[int],
+        on_state_change: Callable[[], None] | None = None,
+        on_event: HistoryHook | None = None,
+    ) -> None:
         self.gpu_ids = list(gpu_ids)
         self._on_state_change = on_state_change or (lambda: None)
+        self._on_event: HistoryHook = on_event or _no_history
         self._queues: dict[int, GpuQueue] = {
-            gid: GpuQueue(gid, self._on_state_change) for gid in self.gpu_ids
+            gid: GpuQueue(gid, self._on_state_change, self._on_event)
+            for gid in self.gpu_ids
         }
         self._closed = False
 

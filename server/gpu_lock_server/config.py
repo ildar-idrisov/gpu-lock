@@ -13,6 +13,9 @@ class Settings:
     log_file: str | None
     log_level: str
     shutdown_drain_seconds: float
+    history_dir: str | None
+    history_rotate_seconds: int
+    history_retention_seconds: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -23,6 +26,9 @@ class Settings:
             log_file=_nonempty(os.environ.get("GPU_LOCK_LOG_FILE")),
             log_level=os.environ.get("GPU_LOCK_LOG_LEVEL", "INFO").upper(),
             shutdown_drain_seconds=float(os.environ.get("GPU_LOCK_SHUTDOWN_DRAIN", "5")),
+            history_dir=_nonempty(os.environ.get("GPU_LOCK_HISTORY_DIR")),
+            history_rotate_seconds=int(os.environ.get("GPU_LOCK_HISTORY_ROTATE_SEC", "3600")),
+            history_retention_seconds=int(os.environ.get("GPU_LOCK_HISTORY_RETENTION_SEC", "86400")),
         )
 
 

@@ -88,6 +88,198 @@ def queue_info_sync(gpu: Optional[int] = None) -> Optional[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# History introspection — "did anyone actually use the GPU recently?"
+# ---------------------------------------------------------------------------
+
+
+def _history_params(
+    since_seconds: Optional[float],
+    since_minutes: Optional[float],
+    since_hours: Optional[float],
+    since_days: Optional[float],
+    gpu: Optional[int],
+    exclude_owners: Optional[list[str]],
+    include_owners: Optional[list[str]],
+    events: Optional[list[str]],
+    limit: Optional[int],
+) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    if since_seconds is not None:
+        params["since_seconds"] = since_seconds
+    if since_minutes is not None:
+        params["since_minutes"] = since_minutes
+    if since_hours is not None:
+        params["since_hours"] = since_hours
+    if since_days is not None:
+        params["since_days"] = since_days
+    if gpu is not None:
+        params["gpu"] = str(gpu)
+    if exclude_owners:
+        params["exclude_owners"] = ",".join(exclude_owners)
+    if include_owners:
+        params["include_owners"] = ",".join(include_owners)
+    if events:
+        params["events"] = ",".join(events)
+    if limit is not None:
+        params["limit"] = limit
+    return params
+
+
+async def history_async(
+    since_seconds: Optional[float] = None,
+    since_minutes: Optional[float] = None,
+    since_hours: Optional[float] = None,
+    since_days: Optional[float] = None,
+    gpu: Optional[int] = None,
+    exclude_owners: Optional[list[str]] = None,
+    include_owners: Optional[list[str]] = None,
+    events: Optional[list[str]] = None,
+    limit: Optional[int] = None,
+) -> Optional[dict[str, Any]]:
+    """Fetch acquire/release history within a recent time window.
+
+    Returns ``None`` in passthrough mode (no GPU_LOCK_URL), on transport
+    error, or if the server has history disabled. Otherwise returns the
+    server payload: ``{"since_ts", "until_ts", "count", "events"}``.
+    """
+    if not _enabled():
+        return None
+    import httpx
+    params = _history_params(
+        since_seconds, since_minutes, since_hours, since_days,
+        gpu, exclude_owners, include_owners, events, limit,
+    )
+    if not params:
+        raise ValueError("specify one of since_seconds/minutes/hours/days")
+    try:
+        async with httpx.AsyncClient(timeout=10, headers=_headers()) as client:
+            r = await client.get(f"{_url()}/history", params=params)
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            return r.json()
+    except Exception as exc:
+        log.warning("gpu-lock history failed (%s)", exc)
+        return None
+
+
+def history_sync(
+    since_seconds: Optional[float] = None,
+    since_minutes: Optional[float] = None,
+    since_hours: Optional[float] = None,
+    since_days: Optional[float] = None,
+    gpu: Optional[int] = None,
+    exclude_owners: Optional[list[str]] = None,
+    include_owners: Optional[list[str]] = None,
+    events: Optional[list[str]] = None,
+    limit: Optional[int] = None,
+) -> Optional[dict[str, Any]]:
+    if not _enabled():
+        return None
+    import httpx
+    params = _history_params(
+        since_seconds, since_minutes, since_hours, since_days,
+        gpu, exclude_owners, include_owners, events, limit,
+    )
+    if not params:
+        raise ValueError("specify one of since_seconds/minutes/hours/days")
+    try:
+        with httpx.Client(timeout=10, headers=_headers()) as client:
+            r = client.get(f"{_url()}/history", params=params)
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            return r.json()
+    except Exception as exc:
+        log.warning("gpu-lock history failed (%s)", exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Idle check — "may a polite background task barge in right now?"
+# ---------------------------------------------------------------------------
+
+
+async def is_idle_async(
+    gpu: Optional[int] = None,
+    idle_minutes: float = 30.0,
+    exclude_owners: Optional[list[str]] = None,
+) -> bool:
+    """True iff the queue is empty AND no acquire/grant happened in the
+    last ``idle_minutes`` minutes by anyone other than ``exclude_owners``.
+
+    In passthrough mode (no GPU_LOCK_URL) returns True — single-tenant dev
+    workflows don't need to coordinate.
+
+    On transport error returns False (fail-closed: prefer skipping a
+    background task over racing real users).
+
+    If the server has history disabled the function falls back to the
+    queue-empty check only — it can't tell whether someone touched the
+    card recently.
+    """
+    if not _enabled():
+        return True
+    queue = await queue_info_async(gpu=gpu)
+    if queue is None:
+        return False
+    if not _queue_is_empty(queue, gpu):
+        return False
+    hist = await history_async(
+        since_minutes=idle_minutes,
+        gpu=gpu,
+        exclude_owners=exclude_owners,
+    )
+    if hist is None:
+        # History disabled or transport failed — be conservative but don't
+        # block forever. Queue is already known empty, so allow the caller
+        # through. If history was just disabled this is the right call;
+        # if it was a transport flake, the next attempt will recover.
+        return True
+    return hist.get("count", 0) == 0
+
+
+def is_idle_sync(
+    gpu: Optional[int] = None,
+    idle_minutes: float = 30.0,
+    exclude_owners: Optional[list[str]] = None,
+) -> bool:
+    if not _enabled():
+        return True
+    queue = queue_info_sync(gpu=gpu)
+    if queue is None:
+        return False
+    if not _queue_is_empty(queue, gpu):
+        return False
+    hist = history_sync(
+        since_minutes=idle_minutes,
+        gpu=gpu,
+        exclude_owners=exclude_owners,
+    )
+    if hist is None:
+        return True
+    return hist.get("count", 0) == 0
+
+
+def _queue_is_empty(queue: dict[str, Any], gpu: Optional[int]) -> bool:
+    """Interpret /queue response shape — single-gpu or all-gpu form."""
+    if gpu is not None:
+        # Single-gpu form: {"gpu": 0, "queue_length": N, "busy": bool}.
+        if "gpus" not in queue:
+            return not queue.get("busy", False) and queue.get("queue_length", 0) == 0
+        # All-gpu form returned even though we asked for one — fall through.
+    gpus = queue.get("gpus")
+    if not isinstance(gpus, dict):
+        return False
+    for g_id, info in gpus.items():
+        if gpu is not None and str(gpu) != str(g_id):
+            continue
+        if info.get("busy", False) or info.get("queue_length", 0) > 0:
+            return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Acquire / release / renew — low-level
 # ---------------------------------------------------------------------------
 

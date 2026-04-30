@@ -33,6 +33,7 @@ from fastapi.responses import JSONResponse
 from . import __version__
 from .auth import AuthMiddleware
 from .config import Settings
+from .history import HistoryWriter
 from .logging_config import configure as configure_logging
 from .manager import GRANT, SHUTDOWN, WAIT_TIMEOUT, GpuLockManager, ShutdownError
 from .models import Priority
@@ -46,7 +47,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(level=settings.log_level, file=settings.log_file)
 
     state = StateFile(settings.state_file)
-    manager = GpuLockManager(settings.gpu_ids, on_state_change=lambda: _flush(state, manager))
+    history = HistoryWriter(
+        settings.history_dir,
+        rotate_sec=settings.history_rotate_seconds,
+        retention_sec=settings.history_retention_seconds,
+    )
+    manager = GpuLockManager(
+        settings.gpu_ids,
+        on_state_change=lambda: _flush(state, manager),
+        on_event=history.write if history.enabled else None,
+    )
 
     saved = state.load()
     if saved:
@@ -169,9 +179,83 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "gpu_ids": settings.gpu_ids,
             "version": __version__,
             "shutting_down": manager.is_closed(),
+            "history_enabled": history.enabled,
+        }
+
+    @app.get("/history")
+    async def history_endpoint(
+        since_seconds: float | None = Query(default=None, ge=0),
+        since_minutes: float | None = Query(default=None, ge=0),
+        since_hours: float | None = Query(default=None, ge=0),
+        since_days: float | None = Query(default=None, ge=0),
+        gpu: int | None = Query(default=None),
+        exclude_owners: str | None = Query(
+            default=None,
+            description="Comma-separated list of owners to drop from results.",
+        ),
+        include_owners: str | None = Query(
+            default=None,
+            description="Comma-separated allow-list of owners.",
+        ),
+        events: str | None = Query(
+            default=None,
+            description="Comma-separated event filter (grant,release,enqueue,...).",
+        ),
+        limit: int | None = Query(default=None, ge=1, le=100000),
+    ):
+        if not history.enabled:
+            raise HTTPException(404, "history disabled (set GPU_LOCK_HISTORY_DIR)")
+        seconds = _resolve_window(since_seconds, since_minutes, since_hours, since_days)
+        if seconds is None:
+            raise HTTPException(400, "specify one of since_seconds/minutes/hours/days")
+        import time as _time
+        until = _time.time()
+        since = until - seconds
+        excl = _split_csv(exclude_owners)
+        incl = _split_csv(include_owners)
+        evt = _split_csv(events)
+        results = history.query(
+            since_ts=since,
+            until_ts=until,
+            gpu=gpu,
+            exclude_owners=excl,
+            include_owners=incl,
+            events=evt,
+            limit=limit,
+        )
+        return {
+            "since_ts": since,
+            "until_ts": until,
+            "count": len(results),
+            "events": results,
         }
 
     return app
+
+
+def _resolve_window(
+    seconds: float | None,
+    minutes: float | None,
+    hours: float | None,
+    days: float | None,
+) -> float | None:
+    candidates = [
+        (seconds, 1.0),
+        (minutes, 60.0),
+        (hours, 3600.0),
+        (days, 86400.0),
+    ]
+    given = [(v, mult) for (v, mult) in candidates if v is not None]
+    if not given:
+        return None
+    return max(v * mult for v, mult in given)
+
+
+def _split_csv(raw: str | None) -> list[str] | None:
+    if not raw:
+        return None
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    return parts or None
 
 
 def _flush(state: StateFile, manager: GpuLockManager) -> None:

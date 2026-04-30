@@ -35,7 +35,7 @@ Short imperative summary; body optional. No strict convention, but tagging the a
 
 ## Releasing
 
-Maintainers only. See [PUBLISHING.md](PUBLISHING.md).
+Maintainers only. Bump the version in `client/pyproject.toml` and `server/pyproject.toml`, move the `## [Unreleased]` section of `CHANGELOG.md` under a new `## [X.Y.Z]` heading, tag `vX.Y.Z`, and push the tag — the `Publish` workflow handles PyPI, GHCR, and GitHub Release end-to-end. Pre-release tags (`-rc1`/`-alpha1`/`-beta1`) only hit TestPyPI.
 
 ## Reporting security issues
 

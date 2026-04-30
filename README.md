@@ -222,7 +222,7 @@ python -m build server/
 
 ## Releasing
 
-See [PUBLISHING.md](PUBLISHING.md) for the full step-by-step procedure (one-time PyPI Trusted Publishing setup + per-release loop). Short version: bump version in `client/pyproject.toml`, update `CHANGELOG.md`, tag `vX.Y.Z`, push tag — CI publishes to PyPI, pushes to GHCR, and creates a GitHub Release automatically.
+Bump the version in `client/pyproject.toml` and `server/pyproject.toml`, update `CHANGELOG.md`, tag `vX.Y.Z`, and push the tag. The `Publish` workflow in `.github/workflows/publish.yml` builds the sdist + wheel, uploads to PyPI via OIDC trusted publishing, builds and pushes the server image to GHCR, and creates a GitHub Release with notes pulled from the matching `CHANGELOG.md` section. Pre-release tags (`-rc1` / `-alpha1` / `-beta1`) go to TestPyPI only.
 
 ## Contributing
 

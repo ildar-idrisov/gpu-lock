@@ -73,3 +73,8 @@ gpu-lock.state.json
 
 # Log files
 *.log
+
+# Local-only maintainer notes. Anything project-specific (downstream pins,
+# personal compose paths, private rollout playbooks) lives in PUBLISHING.md
+# and never gets committed.
+PUBLISHING.md

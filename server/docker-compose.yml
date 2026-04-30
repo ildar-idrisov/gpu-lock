@@ -17,6 +17,11 @@ services:
       GPU_LOCK_LOG_LEVEL: "${GPU_LOCK_LOG_LEVEL:-INFO}"
       # How long the server waits for drain on SIGTERM before force-release.
       GPU_LOCK_SHUTDOWN_DRAIN: "${GPU_LOCK_SHUTDOWN_DRAIN:-5}"
+      # Optional: cyclic JSONL history of acquire/release events.
+      # Unset/empty → history disabled, /history endpoint returns 404.
+      GPU_LOCK_HISTORY_DIR: "${GPU_LOCK_HISTORY_DIR:-/var/lib/gpu-lock/history}"
+      GPU_LOCK_HISTORY_ROTATE_SEC: "${GPU_LOCK_HISTORY_ROTATE_SEC:-3600}"
+      GPU_LOCK_HISTORY_RETENTION_SEC: "${GPU_LOCK_HISTORY_RETENTION_SEC:-86400}"
     ports:
       - "8090:8090"
     volumes:

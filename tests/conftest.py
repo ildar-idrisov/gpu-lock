@@ -38,6 +38,9 @@ def make_app():
         state_file=None,
         log_level="WARNING",
         shutdown_drain=2.0,
+        history_dir=None,
+        history_rotate_seconds=3600,
+        history_retention_seconds=86400,
     ):
         settings = Settings(
             gpu_ids=list(gpu_ids),
@@ -46,6 +49,9 @@ def make_app():
             log_file=None,
             log_level=log_level,
             shutdown_drain_seconds=shutdown_drain,
+            history_dir=str(history_dir) if history_dir else None,
+            history_rotate_seconds=history_rotate_seconds,
+            history_retention_seconds=history_retention_seconds,
         )
         return create_app(settings)
 
